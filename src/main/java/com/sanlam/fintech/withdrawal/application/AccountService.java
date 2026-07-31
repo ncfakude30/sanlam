@@ -18,26 +18,12 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
 
-/**
- * Owns the withdrawal use case and its transaction boundary.
- *
- * <p>Correctness rests on three things:</p>
- * <ol>
- *   <li><b>Atomic conditional debit</b> — the balance is decremented in a single
- *       {@code UPDATE ... WHERE balance >= amount}, so two concurrent withdrawals can never both
- *       pass a stale balance check and overdraw the account.</li>
- *   <li><b>Reservation-first idempotency</b> — the withdrawal row (with a UNIQUE idempotency key)
- *       is inserted <em>before</em> the debit. Two concurrent requests with the same key therefore
- *       contend on the unique key rather than the account row: the loser fails with a duplicate-key
- *       violation before it debits, and we replay the winner's result. The database constraint is
- *       the source of truth; the up-front read is only a fast path for the common sequential retry.</li>
- *   <li><b>Transactional outbox</b> — the balance change and the event record commit together, so
- *       we never have a committed withdrawal without a recorded event (or vice versa).</li>
- * </ol>
- */
+// The withdrawal use case. Three things keep it correct: an atomic guarded debit, an idempotency
+// key reserved before the debit, and an outbox row written in the same transaction as the balance
+// change. See DECISIONS.md for the reasoning.
 @Service
-public class WithdrawalService {
-    private static final Logger log = LoggerFactory.getLogger(WithdrawalService.class);
+public class AccountService {
+    private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
     private final AccountRepository accountRepository;
     private final WithdrawalRepository withdrawalRepository;
@@ -46,7 +32,7 @@ public class WithdrawalService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    public WithdrawalService(
+    public AccountService(
             AccountRepository accountRepository,
             WithdrawalRepository withdrawalRepository,
             OutboxRepository outboxRepository,
@@ -62,7 +48,7 @@ public class WithdrawalService {
     }
 
     public Withdrawal withdraw(long accountId, String idempotencyKey, WithdrawalRequest request) {
-        // Fast path: a previously completed request with this key is replayed without re-running it.
+        // Fast path: replay a request we've already completed.
         var replay = withdrawalRepository.findByIdempotencyKey(idempotencyKey);
         if (replay.isPresent()) {
             log.info("Idempotent withdrawal replay accountId={} withdrawalId={} idempotencyKey={}",
@@ -74,9 +60,7 @@ public class WithdrawalService {
             return transactionTemplate.execute(status ->
                     executeWithdrawal(accountId, idempotencyKey, request));
         } catch (DuplicateKeyException concurrentDuplicate) {
-            // A concurrent request with the same key won the race and committed first. Its withdrawal
-            // is now visible, so we replay it — the caller gets the same result, and the account was
-            // debited exactly once.
+            // A concurrent duplicate won the race and committed first; replay its result.
             log.info("Concurrent duplicate withdrawal replayed accountId={} idempotencyKey={}",
                     accountId, idempotencyKey);
             return withdrawalRepository.findByIdempotencyKey(idempotencyKey)
@@ -95,19 +79,16 @@ public class WithdrawalService {
                 UUID.randomUUID(), accountId, request.amount(), currency,
                 WithdrawalStatus.SUCCESSFUL, idempotencyKey, occurredAt);
 
-        // Reserve the idempotency key first. Under a concurrent duplicate this throws
-        // DuplicateKeyException here, before any debit happens.
+        // Reserve the key first: a concurrent duplicate fails here, before any debit.
         withdrawalRepository.insert(withdrawal);
 
-        // Atomic, guarded debit: 0 rows means the balance was insufficient (the account's existence
-        // was already confirmed above), which rolls the whole transaction back — including the
-        // reservation just inserted.
+        // Guarded debit. 0 rows means insufficient funds, which rolls back the reservation too.
         int debited = accountRepository.debitIfSufficient(accountId, request.amount(), currency);
         if (debited == 0) {
             throw new InsufficientFundsException(accountId);
         }
 
-        // Same-transaction outbox write: the event is durable the moment the balance change commits.
+        // Outbox write in the same transaction, so the event is durable once the balance commits.
         WithdrawalEvent event = WithdrawalEvent.from(withdrawal, occurredAt);
         outboxRepository.insert(new OutboxEvent(
                 event.eventId(),

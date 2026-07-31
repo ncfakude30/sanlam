@@ -1,5 +1,4 @@
--- Schema is written to run on H2 (local/tests) and to port cleanly to PostgreSQL.
--- Portability notes are called out where the two databases differ.
+-- Runs on H2 for local/tests, ports to PostgreSQL. Differences noted inline.
 
 CREATE TABLE IF NOT EXISTS accounts (
     id BIGINT PRIMARY KEY,
@@ -15,8 +14,7 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     amount NUMERIC(19, 2) NOT NULL CHECK (amount > 0),
     currency CHAR(3) NOT NULL,
     status VARCHAR(30) NOT NULL,
-    -- UNIQUE makes the database the source of truth for idempotency: a duplicate
-    -- request can never create a second withdrawal, even under concurrency.
+    -- UNIQUE makes the DB the source of truth for idempotency, even under concurrency.
     idempotency_key VARCHAR(255) NOT NULL UNIQUE,
     created_at TIMESTAMP NOT NULL
 );
@@ -31,15 +29,12 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     published_at TIMESTAMP NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error VARCHAR(1000) NULL,
-    -- Reserved for max-attempts dead-lettering (see DECISIONS.md); not yet populated.
+    -- Reserved for dead-lettering (see DECISIONS.md); not yet populated.
     dead_lettered_at TIMESTAMP NULL
 );
 
--- Supports the "oldest unpublished first" drain query.
--- PostgreSQL production improvement: make this a PARTIAL index to keep it small and
--- index only rows that still need work:
---   CREATE INDEX idx_outbox_pending ON outbox_events (created_at)
---       WHERE published_at IS NULL AND dead_lettered_at IS NULL;
--- H2 does not support partial indexes, so we index (published_at, created_at) instead.
+-- Drives the "oldest unpublished first" drain. In Postgres this would be a partial index
+-- (WHERE published_at IS NULL AND dead_lettered_at IS NULL); H2 has no partial indexes, so
+-- we index (published_at, created_at) instead.
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
     ON outbox_events (published_at, created_at);

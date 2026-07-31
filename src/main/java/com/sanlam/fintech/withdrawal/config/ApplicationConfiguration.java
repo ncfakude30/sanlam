@@ -12,33 +12,23 @@ import java.time.Clock;
 @Configuration
 public class ApplicationConfiguration {
 
-    /**
-     * A single injectable clock keeps timestamps testable — tests can substitute a fixed clock
-     * instead of reaching for {@code Instant.now()} scattered through the code.
-     */
+    // Injectable clock so tests can pin the time instead of calling Instant.now() everywhere.
     @Bean
     Clock clock() {
         return Clock.systemUTC();
     }
 
-    /**
-     * Region comes from configuration rather than the compiled-in {@code Region.YOUR_REGION}
-     * placeholder in the original snippet. Credentials are resolved by the SDK's default provider
-     * chain at call time, so bean creation succeeds even without credentials present.
-     */
+    // Region comes from config, not a compiled-in constant. Credentials resolve lazily at call
+    // time, so this bean builds fine even when none are present.
     @Bean
-    SnsClient snsClient(WithdrawalProperties properties) {
+    SnsClient snsClient(SanlamBankProperties properties) {
         return SnsClient.builder()
                 .region(Region.of(properties.awsRegion()))
                 .build();
     }
 
-    /**
-     * Explicit {@link TransactionTemplate} so the service can own its transaction boundary
-     * programmatically. This lets us catch a duplicate-key violation <em>outside</em> the
-     * transaction and replay it, which declarative {@code @Transactional} cannot do cleanly
-     * (the exception would already have marked the transaction rollback-only).
-     */
+    // Explicit template so the service can catch a duplicate-key outside the transaction and
+    // replay it. With @Transactional the transaction would already be rollback-only by then.
     @Bean
     TransactionTemplate transactionTemplate(PlatformTransactionManager transactionManager) {
         return new TransactionTemplate(transactionManager);

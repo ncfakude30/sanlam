@@ -1,26 +1,26 @@
 package com.sanlam.fintech.withdrawal.api;
 
-import com.sanlam.fintech.withdrawal.application.WithdrawalService;
+import com.sanlam.fintech.withdrawal.application.AccountService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/bank/accounts/{accountId}/withdrawals")
-public class WithdrawalController {
-    private final WithdrawalService withdrawalService;
+@RequestMapping("/bank")
+public class BankController {
+    private final AccountService accountService;
 
-    public WithdrawalController(WithdrawalService withdrawalService) {
-        this.withdrawalService = withdrawalService;
+    public BankController(AccountService accountService) {
+        this.accountService = accountService;
     }
 
-    @PostMapping
+    @PostMapping("/withdraw")
     public ResponseEntity<WithdrawalResponse> withdraw(
             @PathVariable long accountId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody WithdrawalRequest request) {
 
-        var result = withdrawalService.withdraw(accountId, idempotencyKey, request);
+        var result = accountService.withdraw(accountId, idempotencyKey, request);
         return ResponseEntity.ok(WithdrawalResponse.from(result));
     }
 }

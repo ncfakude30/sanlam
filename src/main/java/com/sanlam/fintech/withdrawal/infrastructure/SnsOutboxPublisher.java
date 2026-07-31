@@ -1,6 +1,6 @@
 package com.sanlam.fintech.withdrawal.infrastructure;
 
-import com.sanlam.fintech.withdrawal.config.WithdrawalProperties;
+import com.sanlam.fintech.withdrawal.config.SanlamBankProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -13,15 +13,9 @@ import software.amazon.awssdk.services.sns.model.PublishRequest;
 import java.time.Clock;
 import java.util.Map;
 
-/**
- * Drains the transactional outbox to SNS. Runs only when
- * {@code withdrawal.outbox.publisher-enabled=true}; local runs leave it off so the service
- * boots and serves withdrawals without AWS credentials.
- *
- * <p>Because publication happens after the withdrawal transaction commits, a transient SNS
- * failure never rolls back a completed withdrawal — the event simply stays pending and is
- * retried on the next cycle.</p>
- */
+// Drains the outbox to SNS. Off by default (withdrawal.outbox.publisher-enabled) so the app runs
+// without AWS credentials. Publishing happens after commit, so a failed publish just leaves the
+// event pending for the next cycle; it never rolls back a completed withdrawal.
 @Component
 @ConditionalOnProperty(name = "withdrawal.outbox.publisher-enabled", havingValue = "true")
 public class SnsOutboxPublisher {
@@ -37,7 +31,7 @@ public class SnsOutboxPublisher {
     public SnsOutboxPublisher(
             OutboxRepository outboxRepository,
             SnsClient snsClient,
-            WithdrawalProperties properties,
+            SanlamBankProperties properties,
             Clock clock) {
         this.outboxRepository = outboxRepository;
         this.snsClient = snsClient;
@@ -62,10 +56,8 @@ public class SnsOutboxPublisher {
                 outboxRepository.markPublished(event.id(), clock.instant());
                 log.info("Outbox event published eventId={} eventType={}", event.id(), event.eventType());
             } catch (RuntimeException ex) {
-                // Record the failure and move on; the event stays pending and is retried next cycle.
-                // A production system would add bounded retries with backoff and, on exhaustion,
-                // move the event to a dead-letter state (dead_lettered_at) with an alert. That
-                // escalation is intentionally left out of scope here — see DECISIONS.md.
+                // Record it and move on; the event stays pending and retries next cycle. Bounded
+                // retries + dead-lettering would go here (see DECISIONS.md), left out of scope.
                 outboxRepository.recordFailure(event.id(), safeMessage(ex));
                 log.error("Outbox event publication failed eventId={} attempts={}",
                         event.id(), event.attempts() + 1, ex);

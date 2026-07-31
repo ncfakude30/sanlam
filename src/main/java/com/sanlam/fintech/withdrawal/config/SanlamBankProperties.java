@@ -2,15 +2,9 @@ package com.sanlam.fintech.withdrawal.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/**
- * Externalised configuration for the withdrawal service.
- *
- * <p>The original snippet hard-coded the AWS region and SNS topic ARN inside application code.
- * Binding them here keeps deployment-specific values out of the source and lets each environment
- * (local, test, staging, production) supply its own.</p>
- */
+// Region and topic ARN come from config instead of being hard-coded like the original snippet.
 @ConfigurationProperties(prefix = "withdrawal")
-public record WithdrawalProperties(
+public record SanlamBankProperties(
         String awsRegion,
         Events events,
         Outbox outbox) {
