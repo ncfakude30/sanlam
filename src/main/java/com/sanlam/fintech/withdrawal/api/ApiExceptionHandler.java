@@ -1,12 +1,12 @@
 package com.sanlam.fintech.withdrawal.api;
 
-import com.sanlam.fintech.withdrawal.domain.AccountNotFoundException;
-import com.sanlam.fintech.withdrawal.domain.InsufficientFundsException;
+import com.sanlam.fintech.withdrawal.domain.exception.AccountNotFoundException;
+import com.sanlam.fintech.withdrawal.domain.exception.InsufficientFundsException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 import java.time.Instant;
 
@@ -23,8 +23,8 @@ public class ApiExceptionHandler {
         return error(HttpStatus.CONFLICT, "INSUFFICIENT_FUNDS", ex.getMessage());
     }
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    ResponseEntity<ApiError> invalidRequest(MethodArgumentNotValidException ex) {
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    ResponseEntity<ApiError> invalidRequest(HandlerMethodValidationException ex) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "The withdrawal request is invalid");
     }
 

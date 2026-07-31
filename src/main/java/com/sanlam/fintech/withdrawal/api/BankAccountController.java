@@ -7,10 +7,10 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/bank")
-public class BankController {
+public class BankAccountController {
     private final AccountService accountService;
 
-    public BankController(AccountService accountService) {
+    public BankAccountController(AccountService accountService) {
         this.accountService = accountService;
     }
 

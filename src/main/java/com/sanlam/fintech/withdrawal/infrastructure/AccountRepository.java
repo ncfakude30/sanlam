@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 
 @Repository
 public class AccountRepository {
@@ -13,32 +14,28 @@ public class AccountRepository {
         this.jdbc = jdbc;
     }
 
-    public boolean existsWithCurrency(long accountId, String currency) {
-        return jdbc.sql("""
-                SELECT COUNT(*)
-                  FROM accounts
-                 WHERE id = :accountId
-                   AND currency = :currency
-                """)
+    // Returns the account's own currency, or empty if the account doesn't exist. The withdrawal
+    // is denominated in whatever currency the account holds, so callers don't pass one in.
+    public Optional<String> findCurrency(long accountId) {
+        return jdbc.sql("SELECT currency FROM accounts WHERE id = :accountId")
                 .param("accountId", accountId)
-                .param("currency", currency)
-                .query(Integer.class)
-                .single() > 0;
+                .query(String.class)
+                .optional();
     }
 
-    public int debitIfSufficient(long accountId, BigDecimal amount, String currency) {
+    // Atomic guarded debit: decrements only if the balance covers it. 0 rows means insufficient
+    // funds, and the database serialises concurrent debits on the row.
+    public int debitIfSufficient(long accountId, BigDecimal amount) {
         return jdbc.sql("""
                 UPDATE accounts
                    SET balance = balance - :amount,
                        version = version + 1,
                        updated_at = CURRENT_TIMESTAMP
                  WHERE id = :accountId
-                   AND currency = :currency
                    AND balance >= :amount
                 """)
                 .param("amount", amount)
                 .param("accountId", accountId)
-                .param("currency", currency)
                 .update();
     }
 }

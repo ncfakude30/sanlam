@@ -63,7 +63,8 @@ later if event volume needs it.
 ## 7. Smaller things
 
 - `BigDecimal` for money, validated positive with at most 2 decimals. Never `double`.
-- Currency is part of the debit predicate, so you can't withdraw ZAR from a USD account.
+- No currency parameter: the withdrawal is in the account's own currency, which the service reads
+  from the account. Keeps the original two-parameter request (accountId, amount).
 - Constructor injection, no field `@Autowired`.
 - One status, `SUCCESSFUL`. I didn't invent PENDING/FAILED states the original never had.
 

@@ -1,4 +1,4 @@
-package com.sanlam.fintech.withdrawal.domain;
+package com.sanlam.fintech.withdrawal.domain.exception;
 
 public class AccountNotFoundException extends RuntimeException {
     public AccountNotFoundException(long accountId) {

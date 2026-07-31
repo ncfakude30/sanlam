@@ -1,8 +1,7 @@
 package com.sanlam.fintech.withdrawal.application;
 
-import com.sanlam.fintech.withdrawal.api.WithdrawalRequest;
-import com.sanlam.fintech.withdrawal.domain.InsufficientFundsException;
 import com.sanlam.fintech.withdrawal.domain.Withdrawal;
+import com.sanlam.fintech.withdrawal.domain.exception.InsufficientFundsException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * atomic SQL and the transaction boundary are genuinely under test.
  */
 @SpringBootTest
-class WithdrawalServiceTest {
+class AccountServiceTest {
 
     // The outbox publisher is disabled in tests; SNS is never contacted. Mocked purely so no real
     // client is constructed.
@@ -36,7 +35,7 @@ class WithdrawalServiceTest {
     private SnsClient snsClient;
 
     @Autowired
-    private AccountService withdrawalService;
+    private AccountService accountService;
 
     @Autowired
     private JdbcClient jdbc;
@@ -63,17 +62,13 @@ class WithdrawalServiceTest {
                 .single();
     }
 
-    private static WithdrawalRequest request(String amount) {
-        return new WithdrawalRequest(new BigDecimal(amount), "ZAR");
-    }
-
     @Test
     void concurrent_withdrawals_never_overdraw_the_account() throws InterruptedException {
         long accountId = 1001L;
         givenAccount(accountId, "100.00", "ZAR"); // funds exactly five withdrawals of 20.00
 
         int threads = 10;
-        var pool = Executors.newFixedThreadPool(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
         var startTogether = new CountDownLatch(1);
         var finished = new CountDownLatch(threads);
         var successes = new AtomicInteger();
@@ -83,7 +78,7 @@ class WithdrawalServiceTest {
             pool.submit(() -> {
                 try {
                     startTogether.await();
-                    withdrawalService.withdraw(accountId, UUID.randomUUID().toString(), request("20.00"));
+                    accountService.withdraw(accountId, new BigDecimal("20.00"), UUID.randomUUID().toString());
                     successes.incrementAndGet();
                 } catch (InsufficientFundsException expected) {
                     insufficient.incrementAndGet();
@@ -111,7 +106,7 @@ class WithdrawalServiceTest {
         String sharedKey = "idem-" + UUID.randomUUID();
 
         int threads = 10;
-        var pool = Executors.newFixedThreadPool(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
         var startTogether = new CountDownLatch(1);
         var finished = new CountDownLatch(threads);
         Set<UUID> returnedIds = ConcurrentHashMap.newKeySet();
@@ -120,7 +115,7 @@ class WithdrawalServiceTest {
             pool.submit(() -> {
                 try {
                     startTogether.await();
-                    Withdrawal w = withdrawalService.withdraw(accountId, sharedKey, request("30.00"));
+                    Withdrawal w = accountService.withdraw(accountId, new BigDecimal("30.00"), sharedKey);
                     returnedIds.add(w.id());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -144,12 +139,12 @@ class WithdrawalServiceTest {
         givenAccount(accountId, "500.00", "ZAR");
         String key = "idem-" + UUID.randomUUID();
 
-        Withdrawal first = withdrawalService.withdraw(accountId, key, request("100.00"));
+        Withdrawal first = accountService.withdraw(accountId, new BigDecimal("100.00"), key);
         assertThat(balanceOf(accountId)).isEqualByComparingTo("400.00");
         assertThat(outboxCountFor(first.id())).isEqualTo(1); // event written in the same transaction
 
         // Same key replays the stored result without applying a second debit, even with a new amount.
-        Withdrawal replay = withdrawalService.withdraw(accountId, key, request("250.00"));
+        Withdrawal replay = accountService.withdraw(accountId, new BigDecimal("250.00"), key);
         assertThat(replay.id()).isEqualTo(first.id());
         assertThat(replay.amount()).isEqualByComparingTo("100.00");
         assertThat(balanceOf(accountId)).isEqualByComparingTo("400.00"); // unchanged

@@ -2,8 +2,12 @@ package com.sanlam.fintech.withdrawal.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanlam.fintech.withdrawal.api.WithdrawalRequest;
-import com.sanlam.fintech.withdrawal.domain.*;
+import com.sanlam.fintech.withdrawal.domain.OutboxEvent;
+import com.sanlam.fintech.withdrawal.domain.Withdrawal;
+import com.sanlam.fintech.withdrawal.domain.WithdrawalEvent;
+import com.sanlam.fintech.withdrawal.domain.WithdrawalStatus;
+import com.sanlam.fintech.withdrawal.domain.exception.AccountNotFoundException;
+import com.sanlam.fintech.withdrawal.domain.exception.InsufficientFundsException;
 import com.sanlam.fintech.withdrawal.infrastructure.AccountRepository;
 import com.sanlam.fintech.withdrawal.infrastructure.OutboxRepository;
 import com.sanlam.fintech.withdrawal.infrastructure.WithdrawalRepository;
@@ -13,9 +17,9 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.Locale;
 import java.util.UUID;
 
 // The withdrawal use case. Three things keep it correct: an atomic guarded debit, an idempotency
@@ -47,7 +51,7 @@ public class AccountService {
         this.clock = clock;
     }
 
-    public Withdrawal withdraw(long accountId, String idempotencyKey, WithdrawalRequest request) {
+    public Withdrawal withdraw(long accountId, BigDecimal amount, String idempotencyKey) {
         // Fast path: replay a request we've already completed.
         var replay = withdrawalRepository.findByIdempotencyKey(idempotencyKey);
         if (replay.isPresent()) {
@@ -58,7 +62,7 @@ public class AccountService {
 
         try {
             return transactionTemplate.execute(status ->
-                    executeWithdrawal(accountId, idempotencyKey, request));
+                    executeWithdrawal(accountId, amount, idempotencyKey));
         } catch (DuplicateKeyException concurrentDuplicate) {
             // A concurrent duplicate won the race and committed first; replay its result.
             log.info("Concurrent duplicate withdrawal replayed accountId={} idempotencyKey={}",
@@ -68,22 +72,20 @@ public class AccountService {
         }
     }
 
-    private Withdrawal executeWithdrawal(long accountId, String idempotencyKey, WithdrawalRequest request) {
-        String currency = request.currency().toUpperCase(Locale.ROOT);
-        if (!accountRepository.existsWithCurrency(accountId, currency)) {
-            throw new AccountNotFoundException(accountId);
-        }
+    private Withdrawal executeWithdrawal(long accountId, BigDecimal amount, String idempotencyKey) {
+        String currency = accountRepository.findCurrency(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
 
         Instant occurredAt = clock.instant();
         Withdrawal withdrawal = new Withdrawal(
-                UUID.randomUUID(), accountId, request.amount(), currency,
+                UUID.randomUUID(), accountId, amount, currency,
                 WithdrawalStatus.SUCCESSFUL, idempotencyKey, occurredAt);
 
         // Reserve the key first: a concurrent duplicate fails here, before any debit.
         withdrawalRepository.insert(withdrawal);
 
         // Guarded debit. 0 rows means insufficient funds, which rolls back the reservation too.
-        int debited = accountRepository.debitIfSufficient(accountId, request.amount(), currency);
+        int debited = accountRepository.debitIfSufficient(accountId, amount);
         if (debited == 0) {
             throw new InsufficientFundsException(accountId);
         }
