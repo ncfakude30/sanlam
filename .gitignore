@@ -12,3 +12,6 @@ target/
 # --- OS / logs ---
 .DS_Store
 *.log
+
+# Compiled classes
+*.class
