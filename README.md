@@ -1,118 +1,152 @@
-# Bank account withdrawal — improvement exercise
+# Withdrawal Service
 
-My take on the Sanlam withdrawal exercise. The business capability is unchanged from the original:
-withdraw only when the balance is sufficient, then publish a "withdrawal succeeded" event. Everything
-else is about making that one operation correct, observable and operable.
+Sanlam Fintech technical assessment. The task was to improve a provided bank-account withdrawal
+endpoint while preserving its business behaviour. The original operation is unchanged: a client
+requests a withdrawal, the balance is debited only when funds are sufficient, and a
+"withdrawal succeeded" event is published. Everything else is about making that one operation
+correct, observable, and safe to run in production.
 
-The brief asks for four things, and here's where each lives:
+**Companion documents**
 
-- **Approach** — this file (below).
-- **Implementation choices and trade-offs** — `DECISIONS.md`.
-- **The fixed code** — `src/main/java/...`, runnable (the original snippet is preserved in `docs/` and git history).
-- **Unclear/assumed library usage** — the section near the end of this file.
+| Document | Purpose |
+|----------|---------|
+| [`DECISIONS.md`](DECISIONS.md) | Design decisions and trade-offs, written to be defended in the interview |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Data model, request/publish flows, and metrics to add |
+| [`docs/`](docs/) | The original assessment brief, AI-usage guidelines, and the original code snippet |
 
-`ARCHITECTURE.md` adds the data model, the request flow, and the metrics I'd add for production.
+The brief asks for four things: an outline of the approach, elaboration on the implementation choices,
+the fixed code, and any unclear library usage. These map to the *Approach* section below,
+`DECISIONS.md`, `src/main/java`, and the *Library notes* section respectively.
 
-## What was wrong with the original
+---
 
-- The SNS publish is unreachable. Every branch returns before it, so no event is ever sent.
-- `SELECT balance` then a separate `UPDATE` is a lost-update race: two concurrent withdrawals can
-  both pass the check and overdraw the account.
-- DB write plus SNS publish is a dual write. If one succeeds and the other fails, the balance and the
-  event stream disagree — a reconciliation incident in a banking system.
-- One class does HTTP, SQL, business logic, AWS setup and JSON, so none of it is testable in isolation.
-- `SnsClient` is built in the constructor with a hard-coded region and topic ARN (and
-  `Region.YOUR_REGION` doesn't compile).
-- JSON is built with `String.format`, and the method returns plain strings with no status codes.
-- No idempotency, no stored record, no logging.
+## Problems in the original
+
+| # | Issue | Impact |
+|---|-------|--------|
+| 1 | The SNS publish sits after the method's `return` statements | The event is never published |
+| 2 | `SELECT balance` then a separate `UPDATE` | Lost-update race; concurrent withdrawals overdraw the account |
+| 3 | Database write and SNS publish are a dual write | Balance and event stream can disagree — a reconciliation incident |
+| 4 | One class owns HTTP, SQL, business logic, AWS setup and JSON | Nothing is testable in isolation |
+| 5 | `SnsClient` built in the constructor; region and topic ARN hard-coded | Not configurable or mockable; `Region.YOUR_REGION` does not compile |
+| 6 | JSON assembled with `String.format`; method returns plain strings | Malformed payloads; no status codes for callers |
+| 7 | No idempotency, durable record, or logging | Retries double-withdraw; nothing is auditable |
+
+---
 
 ## Approach
 
-Same endpoint and behaviour, split into layers so each piece has one job:
+The endpoint and behaviour are preserved. The single class is split into layers, each with one
+responsibility:
+
+| Layer | Responsibility |
+|-------|----------------|
+| `api` | HTTP contract: `BankAccountController`, response DTO, error-to-status mapping |
+| `application` | `AccountService` — the use case and the transaction boundary |
+| `domain` | `Withdrawal`, `WithdrawalEvent`, status, and domain exceptions |
+| `infrastructure` | Repositories (atomic SQL via `JdbcClient`) and the SNS outbox publisher |
+| `config` | `SanlamBankProperties` and beans (`SnsClient`, `Clock`, `TransactionTemplate`) |
+
+Three decisions carry the correctness of the whole design:
+
+1. **Atomic conditional debit** — the balance is checked and decremented in a single guarded
+   statement (`UPDATE ... WHERE balance >= :amount`). Zero rows updated means insufficient funds, and
+   the database serialises concurrent requests on the row. This removes the read-then-write race.
+
+2. **Reservation-first idempotency** — the request carries an `Idempotency-Key`, stored on the
+   withdrawal under a unique constraint and inserted *before* the debit. A retry replays the stored
+   result instead of withdrawing again; a concurrent duplicate is rejected on the unique key before it
+   can debit. See [`DECISIONS.md`](DECISIONS.md) §2.
+
+3. **Transactional outbox** — the balance change and the event row commit in the same transaction; a
+   scheduled publisher relays the event to SNS afterwards. A transient SNS outage can never roll back a
+   committed withdrawal.
+
+---
+
+## API
 
 ```
-api/             BankAccountController, response, error handling
-application/     AccountService: the use case and transaction boundary
-domain/          Withdrawal, WithdrawalEvent, status, exceptions
-infrastructure/  repositories (atomic SQL) and the SNS outbox publisher
-config/          SanlamBankProperties and beans
+POST /bank/withdraw?accountId={id}&amount={amount}
+Idempotency-Key: {uuid}
 ```
 
-Three things do most of the work:
+| Response | Condition |
+|----------|-----------|
+| `200 OK` | Withdrawal completed, or an idempotent replay |
+| `400 Bad Request` | Amount ≤ 0 or more than 2 decimals, or the `Idempotency-Key` header is missing |
+| `404 Not Found` | No account with that id |
+| `409 Conflict` | Balance below the requested amount |
 
-1. **Atomic debit.** One statement: `UPDATE ... SET balance = balance - :amount WHERE id = :id AND
-   balance >= :amount`. Zero rows updated means insufficient funds. The database serialises concurrent
-   requests on the row, so the read-then-write race is gone.
-
-2. **Idempotency.** The API requires an `Idempotency-Key` header, stored on the withdrawal under a
-   unique constraint and inserted before the debit. A repeat request replays the stored result instead
-   of withdrawing again. The ordering matters; see `DECISIONS.md` section 2.
-
-3. **Transactional outbox.** The balance change and an `outbox_events` row commit together, and a
-   scheduled publisher relays those rows to SNS afterwards. A withdrawal is never lost because SNS
-   happened to be down.
-
-## The endpoint
-
-Kept the original `POST /bank/withdraw` with `accountId` and `amount` as request params. The one
-deliberate addition is a required `Idempotency-Key` header. The withdrawal is in the account's own
-currency, so there's no currency parameter. Responses are JSON with proper status codes instead of a
-plain string.
-
-```
-POST /bank/withdraw?accountId=42&amount=250.00
-Idempotency-Key: 11111111-1111-1111-1111-111111111111
-```
-
-| Status | When |
-|--------|------|
-| 200 | withdrawal completed, or an idempotent replay |
-| 400 | amount <= 0 / more than 2 decimals, or the Idempotency-Key header is missing |
-| 404 | no account with that id |
-| 409 | balance below the requested amount |
-
-## Running it
-
-The brief says the code needn't compile or run; I made it run anyway so the correctness claims are
-demonstrable. It boots on in-memory H2 with seed accounts, no AWS needed.
+**Example**
 
 ```bash
-mvn test            # concurrency + idempotency tests
-mvn spring-boot:run
-```
-
-Seed accounts: 42 (1000 ZAR), 43 (50 ZAR), 44 (2500 USD).
-
-```bash
-curl -i -XPOST 'localhost:8080/bank/withdraw?accountId=42&amount=250.00' \
+curl -i -XPOST 'http://localhost:8080/bank/withdraw?accountId=42&amount=250.00' \
   -H 'Idempotency-Key: 11111111-1111-1111-1111-111111111111'
 ```
 
-The SNS publisher is off by default (`withdrawal.outbox.publisher-enabled: false`) so it runs without
-credentials; withdrawals still write outbox rows. H2 console at `/h2-console`
-(`jdbc:h2:mem:withdrawals`).
+```json
+{
+  "withdrawalId": "d9657330-ad7f-46a1-907f-71be1195bd76",
+  "accountId": 42,
+  "amount": 250.00,
+  "currency": "ZAR",
+  "status": "SUCCESSFUL"
+}
+```
 
-## Unclear or assumed library usage
+The withdrawal is denominated in the account's own currency, so the request takes only `accountId` and
+`amount` — matching the original signature, with the `Idempotency-Key` header as the one deliberate
+addition.
 
-Things I relied on that are worth calling out, since the brief asks for them:
+---
+
+## Getting started
+
+**Prerequisites:** JDK 21 and Maven.
+
+```bash
+mvn test              # runs the concurrency and idempotency tests
+mvn spring-boot:run   # starts the service on http://localhost:8080
+```
+
+The service boots on an in-memory H2 database seeded with three accounts, so no external
+infrastructure or AWS credentials are required:
+
+| Account | Balance | Currency |
+|---------|---------|----------|
+| 42 | 1000.00 | ZAR |
+| 43 | 50.00 | ZAR |
+| 44 | 2500.00 | USD |
+
+The SNS publisher is disabled by default (`withdrawal.outbox.publisher-enabled: false`); withdrawals
+still record outbox rows. Database state can be inspected at `/h2-console`
+(JDBC URL `jdbc:h2:mem:withdrawals`).
+
+---
+
+## Library notes
+
+Behaviour I relied on that is worth calling out:
 
 - **`JdbcClient` (Spring 6.1)** translates a unique-constraint violation into Spring's
-  `DuplicateKeyException`. The concurrent-duplicate replay depends on that translation.
-- **`ObjectMapper`** (Spring-managed) serialises `Instant` as ISO-8601 via the JSR-310 module, not as
-  an epoch number. I rely on that default rather than configuring it by hand.
-- **AWS SDK v2 `SnsClient`** resolves credentials lazily through the default provider chain at call
-  time, so the bean is created even with no credentials present — only the publisher actually needs them.
-- **Spring 6 native method validation**: constraints on `@RequestParam` throw
-  `HandlerMethodValidationException` (→ 400) *without* `@Validated` on the class; adding `@Validated`
-  switches to the older path that throws `ConstraintViolationException`, so I left it off deliberately.
-- **SNS standard topics are at-least-once**, so consumers must deduplicate — the event carries a
-  stable `eventId` for exactly that.
+  `DuplicateKeyException`; the concurrent-duplicate replay depends on this.
+- **`ObjectMapper`** serialises `Instant` as ISO-8601 via the JSR-310 module rather than an epoch number.
+- **AWS SDK v2 `SnsClient`** resolves credentials lazily through the default provider chain, so the
+  bean is created even without credentials — only the publisher needs them.
+- **Spring 6 method validation** on `@RequestParam` throws `HandlerMethodValidationException` (→ 400)
+  without `@Validated` on the class; `@Validated` would switch to the legacy path, so it is omitted.
+- **SNS standard topics deliver at-least-once**, so consumers deduplicate on the event's `eventId`.
 
-## Notes / out of scope
+---
 
-- Spring Boot 3.5, Java 21, Spring JDBC (`JdbcClient`), AWS SDK v2.
-- `schema.sql` targets H2 for the demo. In Postgres the outbox "pending" index would be partial
-  (`WHERE published_at IS NULL`), and real migrations would live in Flyway.
-- **Security** is excluded by the brief (no auth, ownership checks, encryption, secrets).
-- **Dead-letter escalation** is documented, not implemented: the schema reserves `dead_lettered_at`,
-  but I preferred to show the seam honestly rather than half-build a retry engine. See `DECISIONS.md`.
+## Out of scope
+
+- **Security** — excluded by the brief (no authentication, ownership checks, encryption, or secrets).
+- **Dead-letter escalation** — the schema reserves `dead_lettered_at` and the publisher records
+  `attempts`/`last_error`, but max-attempts escalation is documented rather than half-built
+  (see [`DECISIONS.md`](DECISIONS.md)).
+- **Migrations tooling, multi-instance outbox leasing, ledger accounting** — discussed in
+  `DECISIONS.md` as the next steps.
+
+**Stack:** Java 21, Spring Boot 3.5, Spring JDBC (`JdbcClient`), AWS SDK v2, H2 (local/test).
