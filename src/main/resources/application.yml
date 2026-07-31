@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: withdrawal-service
+  datasource:
+    # In-memory H2 for local runs and tests. A real deployment points this at PostgreSQL.
+    url: jdbc:h2:mem:withdrawals;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always          # runs schema.sql then data.sql on startup
+  h2:
+    console:
+      enabled: true         # http://localhost:8080/h2-console for manual inspection
+
+withdrawal:
+  aws-region: af-south-1
+  events:
+    topic-arn: arn:aws:sns:af-south-1:000000000000:withdrawal-events
+  outbox:
+    poll-delay: 1000        # milliseconds between outbox drain cycles
+    # Disabled by default so the service boots and serves withdrawals without AWS credentials.
+    # Enable (with real AWS or LocalStack) to actually drain the outbox to SNS.
+    publisher-enabled: false
+
+logging:
+  level:
+    com.sanlam.fintech.withdrawal: INFO

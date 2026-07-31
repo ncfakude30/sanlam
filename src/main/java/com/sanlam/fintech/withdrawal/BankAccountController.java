@@ -1,9 +1,3 @@
-/*
- * ORIGINAL CODE — reproduced exactly as provided in the assessment
- * (docs/Withdrawal-Assessment-Exercise.pdf). Kept unmodified as the starting
- * point; the improved implementation lives under src/. This file is a reference
- * only and is intentionally NOT part of the Maven build.
- */
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import software.amazon.awssdk.regions.Region;

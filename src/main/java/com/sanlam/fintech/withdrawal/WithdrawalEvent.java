@@ -1,9 +1,3 @@
-/*
- * ORIGINAL CODE — reproduced exactly as provided in the assessment
- * (docs/Withdrawal-Assessment-Exercise.pdf). Kept unmodified as the starting
- * point; the improved implementation lives under src/. This file is a reference
- * only and is intentionally NOT part of the Maven build.
- */
 public class WithdrawalEvent {
     private BigDecimal amount;
     private Long accountId;
