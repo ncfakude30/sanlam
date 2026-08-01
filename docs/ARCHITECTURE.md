@@ -103,7 +103,7 @@ on the unique index, not the account row:
   debits anything**. `AccountService` catches that outside the transaction, re-reads by key, and
   returns the winner's result.
 
-So a duplicate is a true replay — exactly-once debit, never a spurious 409. See `DECISIONS.md` §2–3.
+So a duplicate is a true replay — exactly-once debit, never a spurious 409. See `DECISIONS.md` §2-3.
 
 ## Outbox publishing
 

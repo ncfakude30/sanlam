@@ -57,7 +57,7 @@ public class SnsOutboxPublisher {
                 log.info("Outbox event published eventId={} eventType={}", event.id(), event.eventType());
             } catch (RuntimeException ex) {
                 // Record it and move on; the event stays pending and retries next cycle. Bounded
-                // retries + dead-lettering would go here (see DECISIONS.md), left out of scope.
+                // retries + dead-lettering would go here (see docs/DECISIONS.md), left out of scope.
                 outboxRepository.recordFailure(event.id(), safeMessage(ex));
                 log.error("Outbox event publication failed eventId={} attempts={}",
                         event.id(), event.attempts() + 1, ex);

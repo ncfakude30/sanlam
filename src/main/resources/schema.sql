@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     published_at TIMESTAMP NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error VARCHAR(1000) NULL,
-    -- Reserved for dead-lettering (see DECISIONS.md); not yet populated.
+    -- Reserved for dead-lettering (see docs/DECISIONS.md); not yet populated.
     dead_lettered_at TIMESTAMP NULL
 );
 

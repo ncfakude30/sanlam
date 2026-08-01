@@ -24,7 +24,7 @@ import java.util.UUID;
 
 // The withdrawal use case. Three things keep it correct: an atomic guarded debit, an idempotency
 // key reserved before the debit, and an outbox row written in the same transaction as the balance
-// change. See DECISIONS.md for the reasoning.
+// change. See docs/DECISIONS.md for the reasoning.
 @Service
 public class AccountService {
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);

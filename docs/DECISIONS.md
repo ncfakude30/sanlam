@@ -28,6 +28,14 @@ duplicate-key error before it debits anything, and I catch that outside the tran
 the winner's row. Exactly-once debit, a real replay, no false 409. The pre-check is just a fast path;
 the constraint is the actual guard.
 
+Two limits I'd tighten before this went live, both deliberate for now:
+
+- The key is globally unique, not scoped per account. That assumes clients send a UUID, which is the
+  normal contract. Scoping the constraint to `(account_id, idempotency_key)` would be stricter.
+- A replay returns the stored withdrawal without checking that the retry asked for the same amount.
+  The usual fix is to fingerprint the request and return 422 when a key is reused with different
+  values, so a client bug surfaces instead of silently returning someone else's result.
+
 ## 3. TransactionTemplate over @Transactional
 
 To replay a duplicate I have to catch the duplicate-key error and then run another query. With

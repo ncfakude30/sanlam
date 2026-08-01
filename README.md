@@ -10,13 +10,13 @@ correct, observable, and safe to run in production.
 
 | Document | Purpose |
 |----------|---------|
-| [`DECISIONS.md`](DECISIONS.md) | Design decisions and trade-offs, written to be defended in the interview |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Data model, request/publish flows, and metrics to add |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Design decisions and trade-offs, written to be defended in the interview |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data model, request/publish flows, and metrics to add |
 | [`docs/`](docs/) | The original assessment brief, AI-usage guidelines, and the original code snippet |
 
 The brief asks for four things: an outline of the approach, elaboration on the implementation choices,
 the fixed code, and any unclear library usage. These map to the *Approach* section below,
-`DECISIONS.md`, `src/main/java`, and the *Library notes* section respectively.
+`docs/DECISIONS.md`, `src/main/java`, and the *Library notes* section respectively.
 
 ---
 
@@ -56,7 +56,7 @@ Three decisions carry the correctness of the whole design:
 2. **Reservation-first idempotency** — the request carries an `Idempotency-Key`, stored on the
    withdrawal under a unique constraint and inserted *before* the debit. A retry replays the stored
    result instead of withdrawing again; a concurrent duplicate is rejected on the unique key before it
-   can debit. See [`DECISIONS.md`](DECISIONS.md) §2.
+   can debit. See [`docs/DECISIONS.md`](docs/DECISIONS.md) §2.
 
 3. **Transactional outbox** — the balance change and the event row commit in the same transaction; a
    scheduled publisher relays the event to SNS afterwards. A transient SNS outage can never roll back a
@@ -145,8 +145,8 @@ Behaviour I relied on that is worth calling out:
 - **Security** — excluded by the brief (no authentication, ownership checks, encryption, or secrets).
 - **Dead-letter escalation** — the schema reserves `dead_lettered_at` and the publisher records
   `attempts`/`last_error`, but max-attempts escalation is documented rather than half-built
-  (see [`DECISIONS.md`](DECISIONS.md)).
+  (see [`docs/DECISIONS.md`](docs/DECISIONS.md)).
 - **Migrations tooling, multi-instance outbox leasing, ledger accounting** — discussed in
-  `DECISIONS.md` as the next steps.
+  `docs/DECISIONS.md` as the next steps.
 
 **Stack:** Java 21, Spring Boot 3.5, Spring JDBC (`JdbcClient`), AWS SDK v2, H2 (local/test).
